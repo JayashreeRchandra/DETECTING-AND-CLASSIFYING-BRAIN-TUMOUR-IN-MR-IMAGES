@@ -1,0 +1,152 @@
+clc
+clear all;
+close all;
+%%giving input to the system
+originalImage=imread('1.jpeg');
+figure;
+subplot(2,2,1);
+imshow(originalImage);
+title('original MR image');
+
+%%%Pre-processing of MR images
+
+%%%Converting image to grayscale
+grayScale=rgb2gray(originalImage);
+subplot(2,2,2);
+imshow(grayScale);
+title('Gray scale image');
+
+%%%High-pass FILter
+kernal=-1*ones(3);
+kernal(2,2)=9;
+enhancedImage =imfilter(grayScale,kernal);
+subplot(2,2,3);
+imshow(enhancedImage);
+title('after high-pass filter');
+
+
+%%%Median filter
+medianFiltered=medfilt2(enhancedImage);
+subplot(2,2,4);
+imshow(medianFiltered);
+title('after median filter');
+
+%%%Thershold Segmentation
+BW=imbinarize(medianFiltered,0.6);
+figure;
+subplot(2,2,1);
+imshow(BW);
+title('Thershold Segmentation');
+
+%%%Morphological Operations
+se1=strel('disk',1);
+se2=strel('disk',10);
+first=imclose(BW,se1);
+second=imopen(first,se2);
+subplot(2,2,3);
+imshow(second);
+title('After Morphological structuring operations');
+
+
+%%%Obtainig Red Circle Radius
+stats=regionprops('table',second,'Centroid','MajorAxisLength','MinorAxisLength');
+centers=stats.Centroid;
+daimeters=mean([stats.MajorAxisLength stats.MinorAxisLength],2);
+radii=(diameters/2);
+finalRadii=radii+40;
+if radii>5
+    
+%%%Adding Images
+
+%%%Tumor found
+k=im2unit8(second);
+final=imadd(K,grayScale);
+figure;
+subplot(2,1,1);
+imshow(grayScale);
+title('Original Image');
+subplot(2,1,2);
+imshow(final,[]);
+viscircles(centers,finalRadii);
+title('Detected tumor');
+
+
+outputFolder = fullfile('caltech101');
+rootFolder = fullfile(outputFolder, 'train');
+
+categories = {'malignant', 'benign'};
+
+imds = imageDatastore(fullfile(rootFolder,categories),'LabelSource','foldernames');
+
+tbl = countEachLabel(imds);
+minSetCount = min(tbl{:,2});
+
+imds = splitEachLabel(imds, minSetCount, 'randomize');
+countEachLabel(imds);
+
+malignant = find(imds.Labels == 'malignant', 1);
+benign = find(imds.Labels == 'benign', 1);
+
+
+figure
+subplot(2,2,1);
+imshow(readimage(imds, malignant));
+subplot(2,2,2);
+imshow(readimage(imds, benign));
+
+net = resnet50();
+figure
+plot(net)
+title('Architecture of Resnet-50')
+set(gca, 'YLim', [150 170]);
+
+net.Layers(1)
+net.Layers(end)
+
+numel(net.Layers(end).ClassNames)
+[trainingSet, testSet] = splitEachLabel(imds, 0.3, 'randomize');
+
+imageSize = net.Layers(1).InputSize;
+
+augmentedTrainingSet = augmentedImageDatastore(imageSize, ... 
+    trainingSet, 'ColorPreprocessing', 'gray2rgb');
+
+augmentedTestSet = augmentedImageDatastore(imageSize, ... 
+    testSet, 'ColorPreprocessing', 'gray2rgb');
+
+w1 = net.Layers(2).Weights;
+w1 = mat2gray(w1);
+
+figure
+montage(w1)
+title('First Convolutional Layer Weight')
+
+featureLayer = 'fc1000';
+trainingFeatures = activations(net, ...
+    augmentedTrainingSet,  featureLayer, 'MiniBatchSize', 32, 'OutputAs', 'columns');
+
+trainingLabels = trainingSet.Labels;
+classifier = fitcecoc(trainingFeatures, trainingLabels,... 
+    'Learner', 'Linear', 'Coding', 'onevsall', 'ObservationsIn', 'column');
+testFeatures = activations(net, ...
+    augmentedTestSet,  featureLayer, 'MiniBatchSize', 32, 'OutputAs', 'columns');
+
+predictLabels = predict(classifier, testFeatures, 'ObservationsIn', 'columns');
+
+testLabels = testSet.Labels;
+confMat = confusionmat(testLabels, predictLabels);
+confMat = bsxfun(@rdivide, confMat, sum(confMat, 2));
+
+mean(diag(confMat));
+
+newImage = imread(fullfile('test1-1.jpeg'));
+
+ds = augmentedImageDatastore(imageSize, ... 
+    newImage, 'ColorPreprocessing', 'gray2rgb');
+
+imageFeatures = activations(net, ...
+    ds,  featureLayer, 'MiniBatchSize', 32, 'OutputAs', 'columns');
+
+label = predict(classifier, imageFeatures, 'ObservationsIn', 'columns');
+
+sprintf('The loaded image belongs to %s class', label)
